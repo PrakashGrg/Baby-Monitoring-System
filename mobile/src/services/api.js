@@ -1,7 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const API_BASE = 'http://127.0.0.1:8000/api';
-export const WS_BASE  = 'ws://127.0.0.1:8000/ws';
+// ⚠️ IMPORTANT: Replace YOUR_PC_IP below with your computer's local IP address.
+// Find it by running `ipconfig` (Windows) and looking for "IPv4 Address".
+// Example: if ipconfig shows 192.168.18.5, use that below.
+// Your phone and PC must be on the SAME Wi-Fi network for this to work.
+
+export const API_BASE = 'http://192.168.18.254:8000/api';
+export const WS_BASE  = 'ws://192.168.18.254:8000/ws';
 
 const getToken = async () => AsyncStorage.getItem('access_token');
 const headers  = async (extra = {}) => ({
@@ -53,8 +58,8 @@ export const activityAPI = {
 };
 
 export const detectionAPI = {
-  simulate:    async (babyId)            => fetch(`${API_BASE}/detection/${babyId}/simulate/`, { headers: await headers() }).then(handle),
-  events:      async (babyId)            => fetch(`${API_BASE}/detection/${babyId}/events/`, { headers: await headers() }).then(handle),
+  simulate:    async (babyId)           => fetch(`${API_BASE}/detection/${babyId}/simulate/`, { headers: await headers() }).then(handle),
+  events:      async (babyId)           => fetch(`${API_BASE}/detection/${babyId}/events/`, { headers: await headers() }).then(handle),
   detectFrame: async (babyId, frameB64) => fetch(`${API_BASE}/detection/${babyId}/frame/`, { method:'POST', headers: await headers(), body: JSON.stringify({ frame: frameB64 }) }).then(handle),
 };
 

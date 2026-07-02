@@ -11,15 +11,20 @@ import { colors, spacing, radius, typography, shadow } from '../../theme';
 export default function RegisterScreen({ navigation }) {
   const { register } = useAuth();
   const [form, setForm] = useState({
-    first_name:'', last_name:'', username:'', email:'', password:'', password2:'',
+    first_name: '', last_name: '', username: '', email: '', password: '', password2: '',
   });
   const [loading, setLoading] = useState(false);
+  const [showPass, setShowPass] = useState(false);
+  const [showPass2, setShowPass2] = useState(false);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
 
   const handleRegister = async () => {
     if (!form.username || !form.password) {
       Alert.alert('Error', 'Username and password are required.'); return;
+    }
+    if (form.password.length < 6) {
+      Alert.alert('Error', 'Password must be at least 6 characters.'); return;
     }
     if (form.password !== form.password2) {
       Alert.alert('Error', 'Passwords do not match.'); return;
@@ -28,25 +33,38 @@ export default function RegisterScreen({ navigation }) {
     try {
       await register(form);
     } catch (e) {
-      const msg = Object.values(e || {}).flat().join('\n') || 'Registration failed.';
-      Alert.alert('Error', msg);
+      let msg = 'Registration failed. Please try again.';
+      if (e && typeof e === 'object') {
+        const parts = Object.entries(e).map(([key, val]) => {
+          const text = Array.isArray(val) ? val.join(', ') : String(val);
+          return key === 'detail' ? text : `${key}: ${text}`;
+        });
+        if (parts.length) msg = parts.join('\n');
+      }
+      Alert.alert('Registration failed', msg);
     } finally {
       setLoading(false);
     }
   };
 
-  const Field = ({ label, icon, fieldKey, ...props }) => (
+  const Field = ({ label, icon, fieldKey, secureTextEntry, showValue, onToggleShow, ...props }) => (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
       <View style={styles.inputWrap}>
         <Ionicons name={icon} size={18} color={colors.textMuted} style={styles.inputIcon} />
         <TextInput
-          style={styles.input}
+          style={[styles.input, secureTextEntry !== undefined && { flex: 1 }]}
           placeholderTextColor={colors.textMuted}
           value={form[fieldKey]}
           onChangeText={set(fieldKey)}
+          secureTextEntry={secureTextEntry !== undefined ? !showValue : undefined}
           {...props}
         />
+        {secureTextEntry !== undefined && (
+          <TouchableOpacity onPress={onToggleShow} style={styles.eyeBtn}>
+            <Ionicons name={showValue ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.textMuted} />
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -66,17 +84,32 @@ export default function RegisterScreen({ navigation }) {
 
           <View style={styles.card}>
             <View style={styles.row}>
-              <View style={{ flex:1, marginRight:8 }}>
+              <View style={{ flex: 1, marginRight: 8 }}>
                 <Field label="FIRST NAME" icon="person-outline" fieldKey="first_name" placeholder="Jane" />
               </View>
-              <View style={{ flex:1 }}>
+              <View style={{ flex: 1 }}>
                 <Field label="LAST NAME" icon="person-outline" fieldKey="last_name" placeholder="Doe" />
               </View>
             </View>
-            <Field label="USERNAME"        icon="at-outline"           fieldKey="username"  placeholder="jane_doe"           autoCapitalize="none" />
-            <Field label="EMAIL"           icon="mail-outline"         fieldKey="email"     placeholder="jane@example.com"   keyboardType="email-address" autoCapitalize="none" />
-            <Field label="PASSWORD"        icon="lock-closed-outline"  fieldKey="password"  placeholder="At least 6 chars"  secureTextEntry />
-            <Field label="CONFIRM PASSWORD" icon="lock-closed-outline" fieldKey="password2" placeholder="Repeat password"   secureTextEntry />
+
+            <Field
+              label="USERNAME" icon="at-outline" fieldKey="username"
+              placeholder="jane_doe" autoCapitalize="none"
+            />
+            <Field
+              label="EMAIL" icon="mail-outline" fieldKey="email"
+              placeholder="jane@example.com" keyboardType="email-address" autoCapitalize="none"
+            />
+            <Field
+              label="PASSWORD" icon="lock-closed-outline" fieldKey="password"
+              placeholder="At least 6 characters"
+              secureTextEntry showValue={showPass} onToggleShow={() => setShowPass((v) => !v)}
+            />
+            <Field
+              label="CONFIRM PASSWORD" icon="lock-closed-outline" fieldKey="password2"
+              placeholder="Repeat password"
+              secureTextEntry showValue={showPass2} onToggleShow={() => setShowPass2((v) => !v)}
+            />
 
             <TouchableOpacity style={styles.btn} onPress={handleRegister} disabled={loading}>
               {loading
@@ -88,7 +121,7 @@ export default function RegisterScreen({ navigation }) {
             <TouchableOpacity onPress={() => navigation.navigate('Login')} style={styles.loginLink}>
               <Text style={styles.loginLinkText}>
                 Already have an account?{' '}
-                <Text style={{ color: colors.primary, fontWeight:'600' }}>Sign in</Text>
+                <Text style={{ color: colors.primary, fontWeight: '600' }}>Sign in</Text>
               </Text>
             </TouchableOpacity>
           </View>
@@ -99,20 +132,21 @@ export default function RegisterScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  scroll:        { flexGrow:1, padding:spacing.lg, paddingTop:60 },
-  back:          { position:'absolute', top:16, left:16, padding:8, zIndex:10 },
-  header:        { alignItems:'center', marginBottom:spacing.xl, marginTop:spacing.xl },
-  title:         { ...typography.h1, color:'#fff', marginBottom:6 },
-  sub:           { ...typography.body, color:'rgba(255,255,255,0.8)' },
-  card:          { backgroundColor:'#fff', borderRadius:radius.xl, padding:spacing.xl, ...shadow.lg },
-  row:           { flexDirection:'row' },
-  field:         { marginBottom:spacing.md },
-  label:         { ...typography.label, color:colors.textSecondary, marginBottom:6 },
-  inputWrap:     { flexDirection:'row', alignItems:'center', borderWidth:1.5, borderColor:colors.border, borderRadius:radius.md, backgroundColor:colors.bg, paddingHorizontal:12 },
-  inputIcon:     { marginRight:8 },
-  input:         { flex:1, height:46, ...typography.body, color:colors.textPrimary },
-  btn:           { backgroundColor:colors.primary, borderRadius:radius.md, height:52, justifyContent:'center', alignItems:'center', marginTop:spacing.sm, ...shadow.md },
-  btnText:       { ...typography.h4, color:'#fff' },
-  loginLink:     { alignItems:'center', marginTop:spacing.md },
-  loginLinkText: { ...typography.body, color:colors.textSecondary },
+  scroll:        { flexGrow: 1, padding: spacing.lg, paddingTop: 60 },
+  back:          { position: 'absolute', top: 16, left: 16, padding: 8, zIndex: 10 },
+  header:        { alignItems: 'center', marginBottom: spacing.xl, marginTop: spacing.xl },
+  title:         { ...typography.h1, color: '#fff', marginBottom: 6 },
+  sub:           { ...typography.body, color: 'rgba(255,255,255,0.8)' },
+  card:          { backgroundColor: '#fff', borderRadius: radius.xl, padding: spacing.xl, ...shadow.lg },
+  row:           { flexDirection: 'row' },
+  field:         { marginBottom: spacing.md },
+  label:         { ...typography.label, color: colors.textSecondary, marginBottom: 6 },
+  inputWrap:     { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.bg, paddingHorizontal: 12 },
+  inputIcon:     { marginRight: 8 },
+  input:         { flex: 1, height: 46, ...typography.body, color: colors.textPrimary },
+  eyeBtn:        { padding: 4 },
+  btn:           { backgroundColor: colors.primary, borderRadius: radius.md, height: 52, justifyContent: 'center', alignItems: 'center', marginTop: spacing.sm, ...shadow.md },
+  btnText:       { ...typography.h4, color: '#fff' },
+  loginLink:     { alignItems: 'center', marginTop: spacing.md },
+  loginLinkText: { ...typography.body, color: colors.textSecondary },
 });

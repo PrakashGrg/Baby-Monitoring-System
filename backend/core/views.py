@@ -1,19 +1,16 @@
-from rest_framework import generics, status, viewsets, permissions
+from rest_framework import generics, status, viewsets
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.contrib.auth.models import User
-from django.db.models import Avg, Sum, Count
+from django.db.models import Avg
 from django.utils import timezone
 from datetime import timedelta, date
-import random
-import math
+import random, math, threading
 
 from .models import BabyProfile, ActivityLog, SensorReading
-from .serializers import (
-    RegisterSerializer, UserSerializer, BabyProfileSerializer,
-    ActivityLogSerializer, SensorReadingSerializer
-)
+from .serializers import (RegisterSerializer, UserSerializer, BabyProfileSerializer,
+                           ActivityLogSerializer, SensorReadingSerializer)
 
 
 class RegisterView(generics.CreateAPIView):
@@ -25,10 +22,8 @@ class RegisterView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        return Response({
-            'message': 'Account created successfully',
-            'user': UserSerializer(user).data
-        }, status=status.HTTP_201_CREATED)
+        return Response({'message': 'Account created successfully',
+                         'user': UserSerializer(user).data}, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
@@ -92,31 +87,26 @@ def daily_summary_view(request, baby_id):
     except ValueError:
         target_date = date.today()
 
-    start = timezone.datetime.combine(target_date, timezone.datetime.min.time())
-    end = timezone.datetime.combine(target_date, timezone.datetime.max.time())
-    start = timezone.make_aware(start)
-    end = timezone.make_aware(end)
+    start = timezone.make_aware(timezone.datetime.combine(target_date, timezone.datetime.min.time()))
+    end   = timezone.make_aware(timezone.datetime.combine(target_date, timezone.datetime.max.time()))
 
-    activities = ActivityLog.objects.filter(baby=baby, timestamp__range=(start, end))
+    activities      = ActivityLog.objects.filter(baby=baby, timestamp__range=(start, end))
     sensor_readings = SensorReading.objects.filter(baby=baby, timestamp__range=(start, end))
 
     sleep_minutes = sum(a.duration_minutes or 0 for a in activities if a.activity_type == 'sleep')
     awake_minutes = sum(a.duration_minutes or 0 for a in activities if a.activity_type == 'awake')
-    cry_count = activities.filter(activity_type='cry').count()
-    motion_count = activities.filter(activity_type='motion').count()
-
     avg_temp = sensor_readings.aggregate(avg=Avg('temperature'))['avg'] or 22.0
-    avg_hum = sensor_readings.aggregate(avg=Avg('humidity'))['avg'] or 50.0
+    avg_hum  = sensor_readings.aggregate(avg=Avg('humidity'))['avg'] or 50.0
 
     return Response({
         'date': target_date.isoformat(),
         'baby_name': baby.name,
         'total_sleep_minutes': sleep_minutes,
         'total_awake_minutes': awake_minutes,
-        'cry_count': cry_count,
-        'motion_count': motion_count,
+        'cry_count':    activities.filter(activity_type='cry').count(),
+        'motion_count': activities.filter(activity_type='motion').count(),
         'avg_temperature': round(avg_temp, 1),
-        'avg_humidity': round(avg_hum, 1),
+        'avg_humidity':    round(avg_hum, 1),
         'activity_breakdown': [
             {'type': t, 'count': activities.filter(activity_type=t).count()}
             for t in ['sleep', 'awake', 'cry', 'motion', 'feeding', 'diaper']
@@ -125,33 +115,40 @@ def daily_summary_view(request, baby_id):
     })
 
 
+# Throttle temperature push — max once per 5 minutes per baby
+_last_temp_notif = {}
+TEMP_NOTIF_COOLDOWN = 300
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def sensor_simulate_view(request, baby_id):
-    """Simulate realistic temperature and humidity readings."""
     try:
         baby = BabyProfile.objects.get(id=baby_id, user=request.user)
     except BabyProfile.DoesNotExist:
         return Response({'error': 'Baby not found'}, status=404)
 
-    hour = timezone.now().hour
-    base_temp = 21.0 + 2 * math.sin((hour - 14) * math.pi / 12)
+    hour        = timezone.now().hour
+    base_temp   = 21.0 + 2 * math.sin((hour - 14) * math.pi / 12)
     temperature = round(base_temp + random.uniform(-0.5, 0.5), 1)
-    humidity = round(50 + random.uniform(-5, 5), 1)
+    humidity    = round(50 + random.uniform(-5, 5), 1)
 
-    reading = SensorReading.objects.create(
-        baby=baby,
-        temperature=temperature,
-        humidity=humidity
-    )
+    reading = SensorReading.objects.create(baby=baby, temperature=temperature, humidity=humidity)
 
     if reading.is_temperature_alert:
         ActivityLog.objects.create(
-            baby=baby,
-            activity_type='temperature_alert',
-            description=f'Temperature alert: {temperature}°C',
-            severity='high'
+            baby=baby, activity_type='temperature_alert',
+            description=f'Temperature alert: {temperature}°C', severity='high'
         )
+        # Push with cooldown
+        import time
+        now  = time.time()
+        last = _last_temp_notif.get(baby.id, 0)
+        if now - last > TEMP_NOTIF_COOLDOWN:
+            _last_temp_notif[baby.id] = now
+            def _push():
+                from notifications_app.push import notify_temperature
+                notify_temperature(baby, request.user, temperature)
+            threading.Thread(target=_push, daemon=True).start()
 
     return Response(SensorReadingSerializer(reading).data)
 
@@ -159,7 +156,6 @@ def sensor_simulate_view(request, baby_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def weekly_chart_view(request, baby_id):
-    """Return 7-day chart data for the daily summary screen."""
     try:
         baby = BabyProfile.objects.get(id=baby_id, user=request.user)
     except BabyProfile.DoesNotExist:
@@ -169,18 +165,18 @@ def weekly_chart_view(request, baby_id):
     today = date.today()
 
     for i in range(6, -1, -1):
-        d = today - timedelta(days=i)
+        d     = today - timedelta(days=i)
         labels.append(d.strftime('%a'))
         start = timezone.make_aware(timezone.datetime.combine(d, timezone.datetime.min.time()))
-        end = timezone.make_aware(timezone.datetime.combine(d, timezone.datetime.max.time()))
-        acts = ActivityLog.objects.filter(baby=baby, timestamp__range=(start, end))
+        end   = timezone.make_aware(timezone.datetime.combine(d, timezone.datetime.max.time()))
+        acts  = ActivityLog.objects.filter(baby=baby, timestamp__range=(start, end))
         sleep_data.append(sum(a.duration_minutes or 0 for a in acts if a.activity_type == 'sleep'))
         cry_data.append(acts.filter(activity_type='cry').count())
         motion_data.append(acts.filter(activity_type='motion').count())
 
     return Response({
-        'labels': labels,
+        'labels':        labels,
         'sleep_minutes': sleep_data,
-        'cry_counts': cry_data,
+        'cry_counts':    cry_data,
         'motion_counts': motion_data,
     })

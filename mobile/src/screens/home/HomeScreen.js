@@ -1,25 +1,24 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl,
+  View, Text, ScrollView, TouchableOpacity, StyleSheet,
+  RefreshControl, Animated,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
-import { babyAPI, activityAPI, detectionAPI, notifAPI } from '../../services/api';
+import { babyAPI } from '../../services/api';
+import useRealTimeMonitor from '../../hooks/useRealTimeMonitor';
 import { colors, spacing, radius, typography, shadow } from '../../theme';
-
-const POLL_INTERVAL = 8000;
 
 export default function HomeScreen({ navigation }) {
   const { user } = useAuth();
   const [babies, setBabies]         = useState([]);
   const [activeBaby, setActiveBaby] = useState(null);
-  const [sensor, setSensor]         = useState(null);
-  const [detection, setDetection]   = useState(null);
-  const [unread, setUnread]         = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
+  const { sensor, detection, unread, wsStatus, refresh } = useRealTimeMonitor(activeBaby);
+
+  const loadBabies = useCallback(async () => {
     try {
       const list    = await babyAPI.list();
       const results = list.results || list;
@@ -28,31 +27,12 @@ export default function HomeScreen({ navigation }) {
     } catch {}
   }, []);
 
-  const pollSensors = useCallback(async () => {
-    if (!activeBaby) return;
-    try {
-      const [s, d, u] = await Promise.all([
-        activityAPI.simulateSensor(activeBaby.id),
-        detectionAPI.simulate(activeBaby.id),
-        notifAPI.unreadCount(),
-      ]);
-      setSensor(s);
-      setDetection(d);
-      setUnread(u.unread || 0);
-    } catch {}
-  }, [activeBaby]);
-
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    pollSensors();
-    const interval = setInterval(pollSensors, POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [pollSensors]);
+  useEffect(() => { loadBabies(); }, [loadBabies]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await load();
-    await pollSensors();
+    await loadBabies();
+    await refresh();
     setRefreshing(false);
   };
 
@@ -128,9 +108,43 @@ export default function HomeScreen({ navigation }) {
 
         {activeBaby && (
           <>
+            {/* Connection status bar */}
+            <View style={[
+              styles.connBar,
+              { backgroundColor: wsStatus === 'connected' ? colors.greenLight
+                : wsStatus === 'reconnecting' ? colors.warningLight
+                : colors.borderLight }
+            ]}>
+              <View style={[
+                styles.connDot,
+                { backgroundColor: wsStatus === 'connected' ? colors.green
+                  : wsStatus === 'reconnecting' ? colors.warning
+                  : colors.textMuted }
+              ]} />
+              <Text style={[
+                styles.connText,
+                { color: wsStatus === 'connected' ? colors.green
+                  : wsStatus === 'reconnecting' ? colors.warning
+                  : colors.textMuted }
+              ]}>
+                {wsStatus === 'connected'
+                  ? 'Live — real-time monitoring active'
+                  : wsStatus === 'reconnecting'
+                  ? 'Reconnecting… using fast polling'
+                  : 'Connecting…'}
+              </Text>
+              <View style={styles.updateBadge}>
+                <Text style={styles.updateBadgeText}>2s</Text>
+              </View>
+            </View>
+
+            {/* Status hero card */}
             <View style={[styles.statusCard, isCrying && styles.statusCardAlert]}>
               <View style={styles.statusLeft}>
-                <View style={[styles.stateDot, { backgroundColor: babyState === 'awake' ? colors.amber : colors.primary }]} />
+                <PulsingDot
+                  color={babyState === 'awake' ? colors.amber : colors.primary}
+                  active={hasMotion || isCrying}
+                />
                 <View>
                   <Text style={styles.statusLabel}>CURRENT STATE</Text>
                   <Text style={styles.statusState}>
@@ -148,28 +162,71 @@ export default function HomeScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
+            {/* Sensor grid */}
             <Text style={styles.sectionTitle}>Environment</Text>
             <View style={styles.sensorGrid}>
-              <SensorCard icon="thermometer-outline" label="Temperature" value={sensor ? `${sensor.temperature}°C` : '--'} status={tempStatus} ideal="18–24°C" />
-              <SensorCard icon="water-outline"       label="Humidity"    value={sensor ? `${sensor.humidity}%`    : '--'} status={humStatus}  ideal="40–60%"  />
+              <SensorCard
+                icon="thermometer-outline"
+                label="Temperature"
+                value={sensor ? `${sensor.temperature}°C` : '--'}
+                status={tempStatus}
+                ideal="18–24°C"
+              />
+              <SensorCard
+                icon="water-outline"
+                label="Humidity"
+                value={sensor ? `${sensor.humidity}%` : '--'}
+                status={humStatus}
+                ideal="40–60%"
+              />
             </View>
 
+            {/* Detection cards */}
             <Text style={styles.sectionTitle}>Detection</Text>
             <View style={styles.detectionGrid}>
-              <DetectionCard icon="volume-high-outline" label="Audio"  active={isCrying}            activeLabel="Crying"   inactiveLabel="Quiet"    color={colors.accent}  confidence={detection?.cry?.confidence} />
-              <DetectionCard icon="walk-outline"        label="Motion" active={hasMotion}            activeLabel="Moving"   inactiveLabel="Still"    color={colors.amber}   confidence={detection?.motion?.confidence} />
-              <DetectionCard icon="moon-outline"        label="Sleep"  active={babyState === 'sleep'} activeLabel="Sleeping" inactiveLabel="Awake"   color={colors.primary} confidence={detection?.sleep_state?.confidence} />
+              <DetectionCard
+                icon="volume-high-outline"
+                label="Audio"
+                active={isCrying}
+                activeLabel="Crying"
+                inactiveLabel="Quiet"
+                color={colors.accent}
+                confidence={detection?.cry?.confidence}
+              />
+              <DetectionCard
+                icon="walk-outline"
+                label="Motion"
+                active={hasMotion}
+                activeLabel="Moving"
+                inactiveLabel="Still"
+                color={colors.amber}
+                confidence={detection?.motion?.confidence}
+              />
+              <DetectionCard
+                icon="moon-outline"
+                label="Sleep"
+                active={babyState === 'sleep'}
+                activeLabel="Sleeping"
+                inactiveLabel="Awake"
+                color={colors.primary}
+                confidence={detection?.sleep_state?.confidence}
+              />
             </View>
 
+            {/* Quick actions */}
             <Text style={styles.sectionTitle}>Quick access</Text>
             <View style={styles.actionsGrid}>
               {[
-                { icon:'bar-chart-outline', label:'Daily\nSummary',   screen:'Summary',    params:{ baby: activeBaby } },
+                { icon:'bar-chart-outline', label:'Daily\nSummary',    screen:'Summary',    params:{ baby: activeBaby } },
                 { icon:'list-outline',      label:'Activity\nHistory', screen:'Activities', params:{ baby: activeBaby } },
-                { icon:'person-outline',    label:'Baby\nProfile',    screen:'BabyProfile',params:{ baby: activeBaby } },
+                { icon:'person-outline',    label:'Baby\nProfile',     screen:'BabyProfile',params:{ baby: activeBaby } },
                 { icon:'settings-outline',  label:'Settings',          screen:'Settings',   params:{} },
               ].map(({ icon, label, screen, params }) => (
-                <TouchableOpacity key={screen} style={styles.actionCard} onPress={() => navigation.navigate(screen, params)}>
+                <TouchableOpacity
+                  key={screen}
+                  style={styles.actionCard}
+                  onPress={() => navigation.navigate(screen, params)}
+                >
                   <View style={styles.actionIconWrap}>
                     <Ionicons name={icon} size={24} color={colors.primary} />
                   </View>
@@ -184,11 +241,41 @@ export default function HomeScreen({ navigation }) {
   );
 }
 
-function SensorCard({ icon, label, value, status, ideal }) {
-  const borderColor = status === 'danger' ? colors.danger : status === 'warning' ? colors.warning : colors.green;
-  const bgColor     = status === 'danger' ? colors.dangerLight : status === 'warning' ? colors.warningLight : colors.greenLight;
+function PulsingDot({ color, active }) {
+  const anim = React.useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (active) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(anim, { toValue: 1.5, duration: 500, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 1,   duration: 500, useNativeDriver: true }),
+        ])
+      ).start();
+    } else {
+      anim.stopAnimation();
+      anim.setValue(1);
+    }
+  }, [active]);
+
   return (
-    <View style={[styles.sensorCard, { borderLeftColor:borderColor, borderLeftWidth:3, backgroundColor:bgColor }]}>
+    <View style={styles.dotWrap}>
+      <Animated.View style={[
+        styles.dotOuter,
+        { backgroundColor: color + '30', transform: [{ scale: anim }] }
+      ]} />
+      <View style={[styles.dotInner, { backgroundColor: color }]} />
+    </View>
+  );
+}
+
+function SensorCard({ icon, label, value, status, ideal }) {
+  const borderColor = status === 'danger' ? colors.danger
+    : status === 'warning' ? colors.warning : colors.green;
+  const bgColor = status === 'danger' ? colors.dangerLight
+    : status === 'warning' ? colors.warningLight : colors.greenLight;
+  return (
+    <View style={[styles.sensorCard, { borderLeftColor: borderColor, borderLeftWidth: 3, backgroundColor: bgColor }]}>
       <Ionicons name={icon} size={22} color={borderColor} />
       <Text style={styles.sensorValue}>{value}</Text>
       <Text style={styles.sensorLabel}>{label}</Text>
@@ -199,7 +286,7 @@ function SensorCard({ icon, label, value, status, ideal }) {
 
 function DetectionCard({ icon, label, active, activeLabel, inactiveLabel, color, confidence }) {
   return (
-    <View style={[styles.detCard, active && { borderColor:color, borderWidth:1.5 }]}>
+    <View style={[styles.detCard, active && { borderColor: color, borderWidth: 1.5 }]}>
       <View style={[styles.detIconWrap, { backgroundColor: active ? color + '20' : colors.borderLight }]}>
         <Ionicons name={icon} size={20} color={active ? color : colors.textMuted} />
       </View>
@@ -215,49 +302,59 @@ function DetectionCard({ icon, label, active, activeLabel, inactiveLabel, color,
 }
 
 const styles = StyleSheet.create({
-  container:       { flex:1, backgroundColor:colors.bg },
-  header:          { paddingTop:60, paddingBottom:spacing.xl, paddingHorizontal:spacing.lg },
-  headerTop:       { flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start', marginBottom:spacing.md },
-  greeting:        { ...typography.body, color:'rgba(255,255,255,0.8)' },
-  userName:        { ...typography.h2, color:'#fff' },
-  notifBtn:        { padding:8, position:'relative' },
-  badge:           { position:'absolute', top:4, right:4, backgroundColor:colors.accent, borderRadius:8, width:16, height:16, justifyContent:'center', alignItems:'center' },
-  badgeText:       { ...typography.tiny, color:'#fff' },
-  babyScroll:      { marginTop:spacing.sm },
-  babyChip:        { flexDirection:'row', alignItems:'center', backgroundColor:'rgba(255,255,255,0.2)', borderRadius:radius.full, paddingHorizontal:12, paddingVertical:8, marginRight:8 },
-  babyChipActive:  { backgroundColor:'#fff' },
-  babyAvatar:      { width:24, height:24, borderRadius:12, backgroundColor:colors.primaryLight, justifyContent:'center', alignItems:'center', marginRight:6 },
-  babyAvatarText:  { ...typography.tiny, color:colors.primary, fontWeight:'700' },
-  babyChipText:    { ...typography.small, color:'rgba(255,255,255,0.9)', fontWeight:'600' },
-  babyChipTextActive: { color:colors.primary },
-  addBabyChip:     { width:40, height:40, borderRadius:20, backgroundColor:'#fff', justifyContent:'center', alignItems:'center' },
-  body:            { padding:spacing.lg },
-  emptyCard:       { alignItems:'center', padding:spacing.xl*2, backgroundColor:colors.bgCard, borderRadius:radius.xl, borderWidth:2, borderColor:colors.primaryLight, borderStyle:'dashed' },
-  emptyTitle:      { ...typography.h3, color:colors.textPrimary, marginTop:spacing.md },
-  emptyBody:       { ...typography.body, color:colors.textSecondary, textAlign:'center', marginTop:8 },
-  statusCard:      { flexDirection:'row', justifyContent:'space-between', alignItems:'center', backgroundColor:colors.bgCard, borderRadius:radius.lg, padding:spacing.lg, marginBottom:spacing.lg, ...shadow.md },
-  statusCardAlert: { borderWidth:2, borderColor:colors.accent },
-  statusLeft:      { flexDirection:'row', alignItems:'center' },
-  stateDot:        { width:12, height:12, borderRadius:6, marginRight:12 },
-  statusLabel:     { ...typography.tiny, color:colors.textMuted, letterSpacing:1 },
-  statusState:     { ...typography.h3, color:colors.textPrimary, marginTop:2 },
-  statusMotion:    { ...typography.small, color:colors.amber, marginTop:2 },
-  liveBtn:         { flexDirection:'row', alignItems:'center', backgroundColor:colors.accent, borderRadius:radius.full, paddingHorizontal:16, paddingVertical:8, gap:4 },
-  liveBtnText:     { ...typography.small, color:'#fff', fontWeight:'700' },
-  sectionTitle:    { ...typography.h4, color:colors.textPrimary, marginBottom:spacing.sm, marginTop:4 },
-  sensorGrid:      { flexDirection:'row', gap:12, marginBottom:spacing.lg },
-  sensorCard:      { flex:1, backgroundColor:colors.bgCard, borderRadius:radius.md, padding:spacing.md, ...shadow.sm },
-  sensorValue:     { ...typography.h2, color:colors.textPrimary, marginTop:6 },
-  sensorLabel:     { ...typography.small, color:colors.textSecondary },
-  sensorIdeal:     { ...typography.tiny, color:colors.textMuted, marginTop:4 },
-  detectionGrid:   { flexDirection:'row', gap:10, marginBottom:spacing.lg },
-  detCard:         { flex:1, backgroundColor:colors.bgCard, borderRadius:radius.md, padding:12, alignItems:'center', ...shadow.sm },
-  detIconWrap:     { width:40, height:40, borderRadius:20, justifyContent:'center', alignItems:'center', marginBottom:6 },
-  detLabel:        { ...typography.tiny, color:colors.textSecondary, textTransform:'uppercase', letterSpacing:0.5 },
-  detStatus:       { ...typography.small, fontWeight:'600', marginTop:2 },
-  detConf:         { ...typography.tiny, marginTop:2 },
-  actionsGrid:     { flexDirection:'row', flexWrap:'wrap', gap:12, marginBottom:spacing.xl },
-  actionCard:      { width:'47%', backgroundColor:colors.bgCard, borderRadius:radius.md, padding:spacing.md, alignItems:'center', ...shadow.sm },
-  actionIconWrap:  { width:48, height:48, borderRadius:24, backgroundColor:colors.primaryLight, justifyContent:'center', alignItems:'center', marginBottom:8 },
-  actionLabel:     { ...typography.small, color:colors.textSecondary, textAlign:'center', fontWeight:'600' },
+  container:          { flex: 1, backgroundColor: colors.bg },
+  header:             { paddingTop: 60, paddingBottom: spacing.xl, paddingHorizontal: spacing.lg },
+  headerTop:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: spacing.md },
+  greeting:           { ...typography.body, color: 'rgba(255,255,255,0.8)' },
+  userName:           { ...typography.h2, color: '#fff' },
+  notifBtn:           { padding: 8, position: 'relative' },
+  badge:              { position: 'absolute', top: 4, right: 4, backgroundColor: colors.accent, borderRadius: 8, width: 16, height: 16, justifyContent: 'center', alignItems: 'center' },
+  badgeText:          { ...typography.tiny, color: '#fff' },
+  babyScroll:         { marginTop: spacing.sm },
+  babyChip:           { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: radius.full, paddingHorizontal: 12, paddingVertical: 8, marginRight: 8 },
+  babyChipActive:     { backgroundColor: '#fff' },
+  babyAvatar:         { width: 24, height: 24, borderRadius: 12, backgroundColor: colors.primaryLight, justifyContent: 'center', alignItems: 'center', marginRight: 6 },
+  babyAvatarText:     { ...typography.tiny, color: colors.primary, fontWeight: '700' },
+  babyChipText:       { ...typography.small, color: 'rgba(255,255,255,0.9)', fontWeight: '600' },
+  babyChipTextActive: { color: colors.primary },
+  addBabyChip:        { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center' },
+  body:               { padding: spacing.lg },
+  emptyCard:          { alignItems: 'center', padding: spacing.xl * 2, backgroundColor: colors.bgCard, borderRadius: radius.xl, borderWidth: 2, borderColor: colors.primaryLight, borderStyle: 'dashed' },
+  emptyTitle:         { ...typography.h3, color: colors.textPrimary, marginTop: spacing.md },
+  emptyBody:          { ...typography.body, color: colors.textSecondary, textAlign: 'center', marginTop: 8 },
+
+  connBar:            { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: 10, marginBottom: spacing.md, gap: 8 },
+  connDot:            { width: 8, height: 8, borderRadius: 4 },
+  connText:           { ...typography.tiny, flex: 1, fontWeight: '600' },
+  updateBadge:        { backgroundColor: colors.primary + '20', borderRadius: radius.full, paddingHorizontal: 8, paddingVertical: 2 },
+  updateBadgeText:    { ...typography.tiny, color: colors.primary, fontWeight: '700' },
+
+  statusCard:         { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: colors.bgCard, borderRadius: radius.lg, padding: spacing.lg, marginBottom: spacing.lg, ...shadow.md },
+  statusCardAlert:    { borderWidth: 2, borderColor: colors.accent },
+  statusLeft:         { flexDirection: 'row', alignItems: 'center' },
+  dotWrap:            { width: 32, height: 32, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  dotOuter:           { position: 'absolute', width: 24, height: 24, borderRadius: 12 },
+  dotInner:           { width: 12, height: 12, borderRadius: 6 },
+  statusLabel:        { ...typography.tiny, color: colors.textMuted, letterSpacing: 1 },
+  statusState:        { ...typography.h3, color: colors.textPrimary, marginTop: 2 },
+  statusMotion:       { ...typography.small, color: colors.amber, marginTop: 2 },
+  liveBtn:            { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.accent, borderRadius: radius.full, paddingHorizontal: 16, paddingVertical: 8, gap: 4 },
+  liveBtnText:        { ...typography.small, color: '#fff', fontWeight: '700' },
+
+  sectionTitle:       { ...typography.h4, color: colors.textPrimary, marginBottom: spacing.sm, marginTop: 4 },
+  sensorGrid:         { flexDirection: 'row', gap: 12, marginBottom: spacing.lg },
+  sensorCard:         { flex: 1, backgroundColor: colors.bgCard, borderRadius: radius.md, padding: spacing.md, ...shadow.sm },
+  sensorValue:        { ...typography.h2, color: colors.textPrimary, marginTop: 6 },
+  sensorLabel:        { ...typography.small, color: colors.textSecondary },
+  sensorIdeal:        { ...typography.tiny, color: colors.textMuted, marginTop: 4 },
+  detectionGrid:      { flexDirection: 'row', gap: 10, marginBottom: spacing.lg },
+  detCard:            { flex: 1, backgroundColor: colors.bgCard, borderRadius: radius.md, padding: 12, alignItems: 'center', ...shadow.sm },
+  detIconWrap:        { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 6 },
+  detLabel:           { ...typography.tiny, color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
+  detStatus:          { ...typography.small, fontWeight: '600', marginTop: 2 },
+  detConf:            { ...typography.tiny, marginTop: 2 },
+  actionsGrid:        { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: spacing.xl },
+  actionCard:         { width: '47%', backgroundColor: colors.bgCard, borderRadius: radius.md, padding: spacing.md, alignItems: 'center', ...shadow.sm },
+  actionIconWrap:     { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.primaryLight, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  actionLabel:        { ...typography.small, color: colors.textSecondary, textAlign: 'center', fontWeight: '600' },
 });

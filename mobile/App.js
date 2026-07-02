@@ -7,6 +7,7 @@ import { View, ActivityIndicator } from 'react-native';
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { colors, typography } from './src/theme';
+import usePushNotifications from './src/hooks/usePushNotifications';
 
 import LoginScreen         from './src/screens/auth/LoginScreen';
 import RegisterScreen      from './src/screens/auth/RegisterScreen';
@@ -45,22 +46,25 @@ function MainTabs() {
         tabBarInactiveTintColor: colors.textMuted,
         tabBarLabelStyle: { ...typography.tiny, marginTop: 2 },
         tabBarIcon: ({ focused, color }) => {
-          const [active, inactive] = TAB_ICONS[route.name] || ['ellipse','ellipse-outline'];
+          const [active, inactive] = TAB_ICONS[route.name] || ['ellipse', 'ellipse-outline'];
           return <Ionicons name={focused ? active : inactive} size={22} color={color} />;
         },
       })}
     >
       <Tab.Screen name="Home"       component={HomeScreen}       />
-      <Tab.Screen name="Summary"    component={SummaryScreen}    initialParams={{ baby:null }} />
-      <Tab.Screen name="Activities" component={ActivitiesScreen} initialParams={{ baby:null }} />
+      <Tab.Screen name="Summary"    component={SummaryScreen}    initialParams={{ baby: null }} />
+      <Tab.Screen name="Activities" component={ActivitiesScreen} initialParams={{ baby: null }} />
       <Tab.Screen name="Settings"   component={SettingsScreen}   />
     </Tab.Navigator>
   );
 }
 
 function AppStack() {
+  // Register push notifications when user is logged in
+  usePushNotifications();
+
   return (
-    <Stack.Navigator screenOptions={{ headerShown:false }}>
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Main"          component={MainTabs}           />
       <Stack.Screen name="LiveStream"    component={LiveStreamScreen}   />
       <Stack.Screen name="AddBaby"       component={AddBabyScreen}      />
@@ -72,7 +76,7 @@ function AppStack() {
 
 function AuthStack() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown:false }}>
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Login"    component={LoginScreen}    />
       <Stack.Screen name="Register" component={RegisterScreen} />
     </Stack.Navigator>
@@ -83,7 +87,7 @@ function RootNavigator() {
   const { user, loading } = useAuth();
   if (loading) {
     return (
-      <View style={{ flex:1, justifyContent:'center', alignItems:'center', backgroundColor:colors.bg }}>
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bg }}>
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
